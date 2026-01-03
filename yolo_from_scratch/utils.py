@@ -1,7 +1,9 @@
 import torch
+import cv2
 from collections import Counter
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
 
 # general implementation
@@ -195,10 +197,131 @@ def mean_average_precision(
     return sum(average_precisions)/len(average_precisions)
 
 
-def plot_image(image, boxes):
-    """plot the predicted bounding boxes on the image"""
+# saving and loading model    
+def save_checkpoint(state, filename="model_checkpoint.pth"):
+    print("Saving Checkpoint...")
+    torch.save(state, filename)
+
+def load_checkpoint(checkpoint, model, optimizer):
+    print("Loading Checkpoint...")
+    model.load_state_dict(checkpoint['state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
+
+
+
+# converting cellboxes relative to cells -> relative to image
+def convert_cellboxes(predictions, S=7):
+    """
+        Converts cellbox predictions created relative to a grid cell (total SxS cells) to relative to image. To do this, we follow:
+        x_img = (x_cells+cell_idx)/S
+    """
+    predictions = predictions.to('cpu')
+    batch_size = predictions.shape[0]
+    predictions = predictions.reshape(batch_size,S,S,30)
+    
+    bboxes1 = predictions[..., 21:25]
+    bboxes2 = predictions[..., 26:30]
+    scores = torch.cat(
+        (predictions[..., 20].unsqueeze(0), predictions[..., 25].unsqueeze(0)), dim=0
+    )
+    best_box = scores.argmax(0).unsqueeze(-1)
+    best_boxes = bboxes1*(1-best_box)+best_box*bboxes2
+    
+    # creates a tensor of shape (batch_size,S,S,1)
+    cell_indices = torch.arange(S).repeat(batch_size,S,1).unsqueeze(-1)
+    x = (best_boxes[..., :1]+cell_indices)
+    y = (best_boxes[..., 1:2]+cell_indices.permute(0,2,1,3))
+    w_h = (best_boxes[..., 2:4]+cell_indices)
+    converted_bboxes = torch.cat((x,y,w_h), dim=-1)
+    predicted_class = predictions[..., :20].argmax(-1).unsqueeze(-1)
+    best_confidence = torch.max(predictions[..., 20], predictions(..., 25)).unsqueeze(-1)
+    
+    converted_preds = torch.cat(
+        (predicted_class, best_confidence, converted_bboxes), dim=-1
+    )
+    
+    return converted_preds
+    
+def cellboxes_to_bboxes(out, S=7):
+    converted_pred = convert_cellboxes(out).reshape(out.shape[0], S*S, -1)
+    converted_pred[..., 0] = converted_pred[..., 0].long()
+    all_bboxes = []
+    
+    for ex_idx in range(out.shape[0]):
+        bboxes = []
+        for bbox_idx in range(S*S):
+            bboxes.append([x.item() for x in converted_pred[ex_idx,bbox_idx,:]])
+        all_bboxes.append(bboxes)
+    
+    return all_bboxes
+
+def get_bboxes(
+    loader, model,
+    iou_threshold, threshold,
+    box_format="midpoint", 
+    device="cuda"
+):
+    all_pred_bboxes = []
+    all_true_bboxes = []
+    
+    model.eval()
+    t_idx = 0
+    
+    for batch_idx, (x,labels) in enumerate(loader):
+        x = x.to(device)
+        labels = labels.to(device)
+        
+        with torch.no_grad():
+            predictions = model(x)
+            
+        batch_size = x.shape[0]
+        true_bboxes = cellboxes_to_bboxes(labels)
+        pred_bboxes = cellboxes_to_bboxes(predictions)
+        
+        for idx in range(batch_size):
+            nms_boxes = non_max_suppresssion(
+                pred_bboxes[idx],
+                iou_threshold=iou_threshold,
+                threshold=threshold,
+                box_format=box_format
+            )
+            
+            for nms_box in nms_boxes:
+                all_pred_bboxes.append([t_idx]+nms_box)
+                
+            for box in true_bboxes[idx]:
+                if box[1] > threshold:
+                    all_true_bboxes.append([t_idx]+box)
+            
+            t_idx += 1
+            
+    model.train()
+    return all_pred_bboxes, all_true_bboxes
+
+
+# plots bounding box to the image (current implementation uses matplotlib patches)
+# would add cv2.rectangle method next - it's easier anyways
+def plot_image(image, bboxes):
     img = np.array(image)
-    height, width, _ = np.shape
+    h, w, _ = img.shape
     
     fig, ax = plt.subplots(1)
     ax.imshow(img)
+    
+    for box in bboxes:
+        box = box[2:]
+        assert len(box)==4, "Box has more than 4 values. Required 4 values are (x,y,w,h)"
+        tl_x = box[0]-(box[2]/2)
+        tl_y = box[1]-(box[3]/2)
+        
+        rect = patches.Rectangle(
+            (tl_x*w, tl_y*h),
+            box[2]*w, box[3]*h,
+            linewidth=1,
+            edgecolor='b',
+            facecolor='none'
+        )
+        
+        ax.add_patch(rect)
+        
+    plt.show()
