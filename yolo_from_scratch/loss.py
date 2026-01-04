@@ -39,20 +39,35 @@ class YoloLoss(nn.Module):
         # ======================= #
         # bestbox can be either 0 (box1 was correct) or 1 (box2 was correct)
         box_predictions = exists_box*(
-            bestbox*predictions[..., 26:30]
-            +(1-bestbox)*predictions[..., 21:25]
+            (
+                bestbox*predictions[..., 26:30]+(1-bestbox)*predictions[..., 21:25]
+            )
         )
         box_targets = exists_box*target[..., 21:25]
 
         # i've added 1e-6 post taking the absolute value for now, will change it to do it before taking the absolute value later
-        box_predictions[..., 2:4] = torch.sign(box_predictions[..., 2:4])*torch.sqrt(
-            torch.abs(box_predictions[..., 2:4])+1e-6
+        # box_predictions[..., 2:4] = torch.sign(box_predictions[..., 2:4])*torch.sqrt(
+        #     torch.abs(box_predictions[..., 2:4])+1e-6
+        # )
+
+        # box_targets[..., 2:4] = torch.sqrt(box_targets[..., 2:4])
+        box_predictions = torch.cat(
+            [
+                box_predictions[..., :2],
+                torch.sign(box_predictions[..., 2:4]) *
+                torch.sqrt(torch.abs(box_predictions[..., 2:4]) + 1e-6)
+            ],
+            dim=-1
         )
 
-        box_targets[..., 2:4] = torch.sign(box_targets[..., 2:4])*torch.sqrt(
-            torch.abs(box_targets[..., 2:4])+1e-6
+        box_targets = torch.cat(
+            [
+                box_targets[..., :2],
+                torch.sqrt(box_targets[..., 2:4])
+            ],
+            dim=-1
         )
-        
+
         # the reason behind doing end_dim=-2 (end_dim defines the last dimension to flatten)
         # which is the opposite of start_dim (that defines the first dimension to flatten)
         # is to ensure that we get the following shape conversion:
@@ -74,8 +89,8 @@ class YoloLoss(nn.Module):
 
         # (N*S*S)
         object_loss = self.mse(
-            torch.flatten(exists_box*pred_box, end_dim=-2),
-            torch.flatten(exists_box*target[..., 20:21], end_dim=-2)
+            torch.flatten(exists_box*pred_box),
+            torch.flatten(exists_box*target[..., 20:21])
         )
         
         
@@ -86,26 +101,26 @@ class YoloLoss(nn.Module):
         # let's see which one works
 
         # start_dim=1 as the original implementation results in (N,S*S) tensor
-        # no_object_loss = self.mse(
-        #     torch.flatten((1-exists_box)*predictions[..., 20:21], start_dim=1),
-        #     torch.flatten((1-exists_box)*target[20:21], start_dim=1)
-        # )
-
-        # no_object_loss += self.mse(
-        #     torch.flatten((1-exists_box)*predictions[..., 25:26], start_dim=1),
-        #     torch.flatten((1-exists_box)*target[20:21], start_dim=1)
-        # )
-
-        # end_dim=-2 results in (N*S*S) tensor
         no_object_loss = self.mse(
-            torch.flatten((1-exists_box)*predictions[..., 20:21], end_dim=-2),
-            torch.flatten((1-exists_box)*target[20:21], end_dim=-2)
+            torch.flatten((1-exists_box)*predictions[..., 20:21], start_dim=1),
+            torch.flatten((1-exists_box)*target[..., 20:21], start_dim=1)
         )
 
         no_object_loss += self.mse(
-            torch.flatten((1-exists_box)*predictions[..., 25:26], end_dim=-2),
-            torch.flatten((1-exists_box)*target[20:21], end_dim=-2)
+            torch.flatten((1-exists_box)*predictions[..., 25:26], start_dim=1),
+            torch.flatten((1-exists_box)*target[..., 20:21], start_dim=1)
         )
+
+        # end_dim=-2 results in (N*S*S) tensor
+        # no_object_loss = self.mse(
+        #     torch.flatten((1-exists_box)*predictions[..., 20:21], end_dim=-2),
+        #     torch.flatten((1-exists_box)*target[..., 20:21], end_dim=-2)
+        # )
+
+        # no_object_loss += self.mse(
+        #     torch.flatten((1-exists_box)*predictions[..., 25:26], end_dim=-2),
+        #     torch.flatten((1-exists_box)*target[..., 20:21], end_dim=-2)
+        # )
 
         # ======================= #
         #      FOR CLASS LOSS     #
