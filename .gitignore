@@ -2,4 +2,4 @@
 dataset/
 logs/
 temp.py
-yolo_from_scratch/__pycaches__/
+yolo_from_scratch/__pycache__/
