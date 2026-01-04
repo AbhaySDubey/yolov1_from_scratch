@@ -2,6 +2,7 @@ import torch
 import os
 import pandas as pd
 from PIL import Image
+from torchvision import transforms
 
 class VOCDataset(torch.utils.data.Dataset):
     # the csv_file has 2 columns: one each for the image and labels
@@ -13,9 +14,9 @@ class VOCDataset(torch.utils.data.Dataset):
     # the box co-ordinates for the bounding box are provided in YOLO format (cxcywh as ratio wrt image sizes)
 
     def __init__(
-            self, csv_file, img_dir, label_dir, S=7, B=2, C=20, transform=None
+        self, csv_file, img_dir, label_dir, S=7, B=2, C=20, transform=None
     ):
-        self.annotations = pd.read_csv(csv_file)
+        self.annotation = pd.read_csv(csv_file)
         self.img_dir = img_dir
         self.label_dir = label_dir
         self.transform = transform
@@ -24,7 +25,7 @@ class VOCDataset(torch.utils.data.Dataset):
         self.C = C
 
     def __len__(self):
-        return len(self.annotations)
+        return len(self.annotation)
     
     def __getitem__(self, index):
         label_path = os.path.join(self.label_dir, self.annotation.iloc[index,1])
@@ -36,21 +37,22 @@ class VOCDataset(torch.utils.data.Dataset):
             lines = f.readlines()
             for label in lines:
                 class_label, x, y, width, height = [
-                    float
+                    float(x) if float(x)!=int(float(x)) else int(x)
+                    for x in label.replace("\n", "").split()
                 ]
                 boxes.append([class_label,x,y,width,height])
         
-        img_path = os.path.join(self.img_dir, self.annotations.iloc[index,0])
+        img_path = os.path.join(self.img_dir, self.annotation.iloc[index,0])
         boxes = torch.tensor(boxes)
         image = Image.open(img_path)
-
+        
         # apply any data augmentation to the image, if required
         # we're passing in both the labels as well as the image, because for some augmentations such as
         # image rotation, we'd need to apply the transforms on the labels, too  
         if self.transform:
             image, boxes = self.transform(image, boxes)
 
-        # shape of label_matrix: (S,S,25)
+        # shape of label_matrix: (S,S,C+(5*B))
         label_matrix = torch.zeros((self.S,self.S,self.C+(5*self.B))) # since we have only one bounding box per cell
 
         # the box co-ordinates are given relative to the entire image,
@@ -78,4 +80,6 @@ class VOCDataset(torch.utils.data.Dataset):
                 )
                 label_matrix[i,j,21:25] = box_coordinates
                 label_matrix[i,j,class_label] = 1
+        
+        # print(f"<debug>img type: {type(image)}")
         return image, label_matrix
