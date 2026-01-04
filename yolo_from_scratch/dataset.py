@@ -73,12 +73,12 @@ class VOCDataset(torch.utils.data.Dataset):
             # in the following line, we scale the width and the height by the cell number
             width_cell, height_cell = (self.S*width), (self.S*height)
             
-            if label_matrix[i,j,20] == 0:
-                label_matrix[i,j,20] = 1
+            if label_matrix[i,j,self.C] == 0:
+                label_matrix[i,j,self.C] = 1
                 box_coordinates = torch.tensor(
                     [x_cell,y_cell,width_cell,height_cell]
                 )
-                label_matrix[i,j,21:25] = box_coordinates
+                label_matrix[i,j,self.C+1:self.C+5] = box_coordinates
                 label_matrix[i,j,class_label] = 1
         
         # print(f"<debug>img type: {type(image)}")

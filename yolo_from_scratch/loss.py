@@ -17,14 +17,21 @@ class YoloLoss(nn.Module):
         predictions = predictions.reshape(-1, self.S, self.S, self.C+(self.B*5))
 
         # note:
+        # for C=20
         # predictions[..., 0:20] are the class probabilities
         # predictions[..., 20] is the confidence score for bbox1
         # predictions[..., 21:25] is the co-ordinates for bbox1 
         # predictions[..., 25] is the confidence score for bbox2
         # predictions[..., 26:30] is the co-ordinates for bbox2
         
-        iou_b1 = intersection_over_union(predictions[..., 21:25], target[..., 21:25])
-        iou_b2 = intersection_over_union(predictions[..., 26:30], target[..., 21:25])
+        # to make a more generic approach that can suffice for any number of classes
+        b1_confI = self.C
+        b1_dimsI = [b1_confI+1,b1_confI+5]
+        b2_confI = b1_dimsI[1]
+        b2_dimsI = [b2_confI+1,b2_confI+5]
+        
+        iou_b1 = intersection_over_union(predictions[..., b1_dimsI[0]:b1_dimsI[1]], target[..., b1_dimsI[0]:b1_dimsI[1]])
+        iou_b2 = intersection_over_union(predictions[..., b2_dimsI[0]:b2_dimsI[1]], target[..., b1_dimsI[0]:b1_dimsI[1]])
         # this line first of all converts the iou tensor of shape (batch_size,S,S) to aa tensor of shape (1,batch_size,S,S)
         # further, when we concatenate them using torch.cat() along dim=0, we get a tensor of shape (2,batch_size,S,S)
         # this allows us to later apply torch.argmax(tensor, dim=0) to find the best bounding box (0 or 1) for each image along each grid cell
@@ -32,7 +39,7 @@ class YoloLoss(nn.Module):
         ious = torch.cat([iou_b1.unsqueeze(0), iou_b2.unsqueeze(0)], dim=0)
         bestbox = torch.argmax(ious, dim=0)
         # iou_maxes, bestbox = torch.max(ious, dim=0)
-        exists_box = target[..., 20].unsqueeze(3) # Iobj_i -> it tells us whether an object exists in that cell (0 or 1)
+        exists_box = target[..., b1_confI].unsqueeze(3) # Iobj_i -> it tells us whether an object exists in that cell (0 or 1)
 
         # ======================= #
         #   FOR BOX COORDINATES   #
@@ -40,10 +47,10 @@ class YoloLoss(nn.Module):
         # bestbox can be either 0 (box1 was correct) or 1 (box2 was correct)
         box_predictions = exists_box*(
             (
-                bestbox*predictions[..., 26:30]+(1-bestbox)*predictions[..., 21:25]
+                bestbox*predictions[..., b2_dimsI[0]:b2_dimsI[1]]+(1-bestbox)*predictions[..., b1_dimsI[0]:b1_dimsI[1]]
             )
         )
-        box_targets = exists_box*target[..., 21:25]
+        box_targets = exists_box*target[..., b1_dimsI[0]:b1_dimsI[1]]
 
         # i've added 1e-6 post taking the absolute value for now, will change it to do it before taking the absolute value later
         # box_predictions[..., 2:4] = torch.sign(box_predictions[..., 2:4])*torch.sqrt(
@@ -83,14 +90,14 @@ class YoloLoss(nn.Module):
         #     FOR OBJECT LOSS     #
         # ======================= #
         pred_box = (
-            bestbox*predictions[..., 25:26]
-            +(1-bestbox)*predictions[..., 20:21]
+            bestbox*predictions[..., b2_confI:b2_confI+1]
+            +(1-bestbox)*predictions[..., b1_confI:b1_confI+1]
         )
 
         # (N*S*S)
         object_loss = self.mse(
             torch.flatten(exists_box*pred_box),
-            torch.flatten(exists_box*target[..., 20:21])
+            torch.flatten(exists_box*target[..., b1_confI:b1_confI+1])
         )
         
         
@@ -102,24 +109,24 @@ class YoloLoss(nn.Module):
 
         # start_dim=1 as the original implementation results in (N,S*S) tensor
         no_object_loss = self.mse(
-            torch.flatten((1-exists_box)*predictions[..., 20:21], start_dim=1),
-            torch.flatten((1-exists_box)*target[..., 20:21], start_dim=1)
+            torch.flatten((1-exists_box)*predictions[..., b1_confI:b1_confI+1], start_dim=1),
+            torch.flatten((1-exists_box)*target[..., b1_confI:b1_confI+1], start_dim=1)
         )
 
         no_object_loss += self.mse(
-            torch.flatten((1-exists_box)*predictions[..., 25:26], start_dim=1),
-            torch.flatten((1-exists_box)*target[..., 20:21], start_dim=1)
+            torch.flatten((1-exists_box)*predictions[..., b2_confI:b2_confI+1], start_dim=1),
+            torch.flatten((1-exists_box)*target[..., b1_confI:b1_confI+1], start_dim=1)
         )
 
         # end_dim=-2 results in (N*S*S) tensor
         # no_object_loss = self.mse(
-        #     torch.flatten((1-exists_box)*predictions[..., 20:21], end_dim=-2),
-        #     torch.flatten((1-exists_box)*target[..., 20:21], end_dim=-2)
+        #     torch.flatten((1-exists_box)*predictions[..., 20:b1_dimsI[0]], end_dim=-2),
+        #     torch.flatten((1-exists_box)*target[..., 20:b1_dimsI[0]], end_dim=-2)
         # )
 
         # no_object_loss += self.mse(
         #     torch.flatten((1-exists_box)*predictions[..., 25:26], end_dim=-2),
-        #     torch.flatten((1-exists_box)*target[..., 20:21], end_dim=-2)
+        #     torch.flatten((1-exists_box)*target[..., 20:b1_dimsI[0]], end_dim=-2)
         # )
 
         # ======================= #
@@ -129,8 +136,8 @@ class YoloLoss(nn.Module):
         # shape(original_tensor) := (N,S,S,20) -> for 20 classes
         # shape(flattened_tensor) := (N*S*S,20) -> for 20 classes
         class_loss = self.mse(
-            torch.flatten(exists_box*predictions[..., :20], end_dim=-2),
-            torch.flatten(exists_box*target[..., :20], end_dim=-2)
+            torch.flatten(exists_box*predictions[..., :b1_confI], end_dim=-2),
+            torch.flatten(exists_box*target[..., :b1_confI], end_dim=-2)
         )
 
         # actual loss, as implemented in the paper

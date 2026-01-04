@@ -4,6 +4,22 @@ from collections import Counter
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import csv
+import os
+
+
+def generate_csv(labels_dir, filename):
+    # hard and dangerous assumption that all label and image titles are same, and there's always a .txt labels file for every image
+    labels = [
+        l.split('/')[-1] for l in os.listdir(labels_dir)
+        if l.endswith('.txt')
+    ]
+    
+    with open(filename, 'w', newline='') as file:
+        fw = csv.writer(file, delimiter=',')
+        for label in labels:
+            data = [label, label.replace('.txt', '.jpg')]
+            fw.writerow(data)
 
 
 # general implementation
@@ -210,19 +226,25 @@ def load_checkpoint(checkpoint, model, optimizer):
 
 
 # converting cellboxes relative to cells -> relative to image
-def convert_cellboxes(predictions, S=7):
+def convert_cellboxes(predictions, S=7, C=20, B=2):
     """
         Converts cellbox predictions created relative to a grid cell (total SxS cells) to relative to image. To do this, we follow:
         x_img = (x_cells+cell_idx)/S
     """
     predictions = predictions.to('cpu')
     batch_size = predictions.shape[0]
-    predictions = predictions.reshape(batch_size,S,S,30)
+    predictions = predictions.reshape(batch_size,S,S,C+(B*5))
     
-    bboxes1 = predictions[..., 21:25]
-    bboxes2 = predictions[..., 26:30]
+    
+    b1_confI = C
+    b1_dimsI = [b1_confI+1,b1_confI+5]
+    b2_confI = b1_dimsI[1]
+    b2_dimsI = [b2_confI+1,b2_confI+5]
+    
+    bboxes1 = predictions[..., b1_dimsI[0]:b1_dimsI[1]]
+    bboxes2 = predictions[..., b2_dimsI[0]:b2_dimsI[1]]
     scores = torch.cat(
-        (predictions[..., 20].unsqueeze(0), predictions[..., 25].unsqueeze(0)), dim=0
+        (predictions[..., b1_confI].unsqueeze(0), predictions[..., b2_confI].unsqueeze(0)), dim=0
     )
     best_box = scores.argmax(0).unsqueeze(-1)
     best_boxes = bboxes1*(1-best_box)+best_box*bboxes2
@@ -233,8 +255,8 @@ def convert_cellboxes(predictions, S=7):
     y = (best_boxes[..., 1:2]+cell_indices.permute(0,2,1,3))
     w_h = (best_boxes[..., 2:4]+cell_indices)
     converted_bboxes = torch.cat((x,y,w_h), dim=-1)
-    predicted_class = predictions[..., :20].argmax(-1).unsqueeze(-1)
-    best_confidence = torch.max(predictions[..., 20], predictions[..., 25]).unsqueeze(-1)
+    predicted_class = predictions[..., :b1_confI].argmax(-1).unsqueeze(-1)
+    best_confidence = torch.max(predictions[..., b1_confI], predictions[..., b2_confI]).unsqueeze(-1)
     
     converted_preds = torch.cat(
         (predicted_class, best_confidence, converted_bboxes), dim=-1
