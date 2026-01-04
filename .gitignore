@@ -1,5 +1,5 @@
 .vscode/
 dataset/
 logs/
-sample-images/
 temp.py
+yolo_from_scratch/__pycaches__/
