@@ -94,7 +94,15 @@ class Yolov1(nn.Module):
         S, B, C = split_size, num_boxes, num_classes
         return nn.Sequential(
             nn.Flatten(),
-            # welp, i'll maybe change later to 496, but as per the original paper this should be 4096
+
+            # welp, for now, i'm keeping this to 512 and i'll maybe change it later to 496, but as per the original paper this should be 4096
+            
+            # as per the original paper, this should be
+            # nn.Linear(1024*S*S, 4096),
+            # nn.Dropout(0.0),
+            # nn.LeakyReLU(0.1),
+            # nn.Linear(4096, S*S*(C+(B*5))), # (S,S,30) since, C+B*5 = 30 (C=20,B=2)
+            
             nn.Linear(1024*S*S, 512),
             nn.Dropout(0.0),
             nn.LeakyReLU(0.1),
@@ -105,6 +113,6 @@ def test(S=7, B=2, C=20):
     model = Yolov1(split_size=S, num_boxes=B, num_classes=C)
     x = torch.randn((2,3,448,448)) # shape => (batch_size,channels,height,width)
 
-    print(model(x).shape)
+    # print(model(x).shape)
 
 test()

@@ -234,7 +234,7 @@ def convert_cellboxes(predictions, S=7):
     w_h = (best_boxes[..., 2:4]+cell_indices)
     converted_bboxes = torch.cat((x,y,w_h), dim=-1)
     predicted_class = predictions[..., :20].argmax(-1).unsqueeze(-1)
-    best_confidence = torch.max(predictions[..., 20], predictions(..., 25)).unsqueeze(-1)
+    best_confidence = torch.max(predictions[..., 20], predictions[..., 25]).unsqueeze(-1)
     
     converted_preds = torch.cat(
         (predicted_class, best_confidence, converted_bboxes), dim=-1
